@@ -40,16 +40,16 @@ rm -f mr-out*
 
 echo '***' Starting wc test.
 
-timeout -k 2s 180s ../mrcoordinator ../pg*txt &
+../mrcoordinator ../pg*txt &
 pid=$!
 
 # give the coordinator time to create the sockets.
 sleep 1
 
 # start multiple workers.
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
+../mrworker ../../mrapps/wc.so &
+../mrworker ../../mrapps/wc.so &
+../mrworker ../../mrapps/wc.so &
 
 # wait for the coordinator to exit.
 wait $pid
@@ -79,13 +79,12 @@ sort mr-out-0 > mr-correct-indexer.txt
 rm -f mr-out*
 
 echo '***' Starting indexer test.
-
-timeout -k 2s 180s ../mrcoordinator ../pg*txt &
+ ../mrcoordinator ../pg*txt &
 sleep 1
 
 # start multiple workers
-timeout -k 2s 180s ../mrworker ../../mrapps/indexer.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/indexer.so
+../mrworker ../../mrapps/indexer.so &
+../mrworker ../../mrapps/indexer.so
 
 sort mr-out* | grep . > mr-indexer-all
 if cmp mr-indexer-all mr-correct-indexer.txt
@@ -104,11 +103,11 @@ echo '***' Starting map parallelism test.
 
 rm -f mr-*
 
-timeout -k 2s 180s ../mrcoordinator ../pg*txt &
+../mrcoordinator ../pg*txt &
 sleep 1
 
-timeout -k 2s 180s ../mrworker ../../mrapps/mtiming.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/mtiming.so
+../mrworker ../../mrapps/mtiming.so &
+../mrworker ../../mrapps/mtiming.so
 
 NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
 if [ "$NT" != "2" ]
