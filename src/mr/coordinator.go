@@ -23,7 +23,6 @@ const (
 
 const (
 	reschedule = time.Second * 5
-
 )
 
 type TaskStat struct {
@@ -170,7 +169,7 @@ func (c *Coordinator)Check() {
 				done = false
 			case Running:
 				done = false
-				if time.Now().Sub(c.taskStat[i].startTime) > time.Second * 10 {
+				if time.Since(c.taskStat[i].startTime) > reschedule {
 					c.taskStat[i].stat = Ready
 				}
 			case Finished:
@@ -181,7 +180,7 @@ func (c *Coordinator)Check() {
 		if done {
 			if c.phase == mapTask {
 				c.phase = reduceTask
-				for i, _ := range c.taskStat {
+				for i := range c.taskStat {
 					if i < c.nReduce {
 						c.taskStat[i].stat = Ready;
 					}
@@ -218,7 +217,7 @@ func (c *Coordinator) Done() bool {
 func (c *Coordinator) initMapTask() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i, _ := range c.taskStat {
+	for i := range c.taskStat {
 		if i < len(c.filename) {
 			c.taskStat[i].stat = Ready;
 		} else {
