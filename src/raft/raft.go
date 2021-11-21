@@ -68,8 +68,8 @@ type ApplyMsg struct {
 // Log entry struct
 //
 type LogEntry struct {
-	Index   uint
-	Term    uint
+	Index   int
+	Term    int
 	Command interface{}
 }
 
@@ -86,13 +86,13 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm     uint       // latest term server has seen
+	currentTerm     int       // latest term server has seen
 	votedFor        int        // candidateId that received vote in current term
 	log             []LogEntry // first index is 1
-	commitIndex     uint       // index of highest Dentry known to be commited
-	lastApplied     uint       // index of highest Dentry applied to state machine
-	nextIndex       []uint     // for each server, index of the next Dentry to send to
-	matchIndex      []uint     // for each server, index of highest Dentry known to be replicated
+	commitIndex     int       // index of highest Dentry known to be commited
+	lastApplied     int       // index of highest Dentry applied to state machine
+	nextIndex       []int     // for each server, index of the next Dentry to send to
+	matchIndex      []int     // for each server, index of highest Dentry known to be replicated
 	applyCh         chan ApplyMsg
 	applyCond       *sync.Cond
 	role            Role        // the role of this server
@@ -107,7 +107,7 @@ func (rf *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return int(rf.currentTerm), rf.role == Leader
+	return rf.currentTerm, rf.role == Leader
 }
 
 //
@@ -145,7 +145,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	var currentTerm uint
+	var currentTerm int
 	var votedFor int
 	var logs []LogEntry
 
@@ -156,7 +156,7 @@ func (rf *Raft) readPersist(data []byte) {
 		d.Decode(&logs) != nil {
 		DPrintf("decode error")
 	} else {
-		rf.currentTerm, rf.votedFor, rf.log = uint(currentTerm), votedFor, logs
+		rf.currentTerm, rf.votedFor, rf.log = currentTerm, votedFor, logs
 	}
 	rf.commitIndex, rf.lastApplied = rf.log[0].Index, rf.log[0].Index
 }
@@ -170,22 +170,22 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if lastIncludedIndex <= int(rf.commitIndex) {
+	if lastIncludedIndex <= rf.commitIndex {
 		DPrintf("%d reject CondInstallSnapshot for small lastIncludedIndex %d", rf.me, lastIncludedIndex)
 		return false
 	}
 
 	if lastIncludedIndex > rf.last_log_index() {
 		rf.log = make([]LogEntry, 1)
-		rf.log[0].Index = uint(lastIncludedIndex)
+		rf.log[0].Index = lastIncludedIndex
 	} else {
 		rf.log = shrinkEntriesArray(rf.log[rf.log2phy(lastIncludedIndex):]) 
 	}
 	// if lastIncludedIndex == rf.last_log_index Term need to be update, too, so not in the before {}
-	rf.log[0].Term = uint(lastIncludedTerm)
+	rf.log[0].Term = lastIncludedTerm
 	rf.log[0].Command = nil
-	rf.commitIndex = uint(lastIncludedIndex)
-	rf.lastApplied = uint(lastIncludedIndex)
+	rf.commitIndex = lastIncludedIndex
+	rf.lastApplied = lastIncludedIndex
 	rf.persister.SaveStateAndSnapshot(rf.encodedState(), snapshot)
 	DPrintf("%d accept CondInstallSnapshot lastIncludedIndex %d", rf.me, lastIncludedIndex)
 	return true
@@ -200,7 +200,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if index <= int(rf.log[0].Index) {
+	if index <= rf.log[0].Index {
 		DPrintf("%d reject snapshot since snapshot last includeIndex is smaller than former one", rf.me)
 		return
 	}
@@ -216,10 +216,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term         uint
+	Term         int
 	CandidateId  int
 	LastLogIndex int
-	LastLogTerm  uint
+	LastLogTerm  int
 }
 
 //
@@ -228,28 +228,28 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term        uint
+	Term        int
 	VoteGranted bool
 }
 
 type AppendEntriesArgs struct {
-	Term         uint
+	Term         int
 	LeaderId     int
-	PrevLogIndex uint
-	PrevLogTerm  uint
+	PrevLogIndex int
+	PrevLogTerm  int
 	Entries      []LogEntry
-	LeaderCommit uint
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
-	Term          uint
+	Term          int
 	Success       bool
 	ConflictIndex int
 	ConflictTerm  int
 }
 
 type InstallSnapshotArgs struct {
-	Term              uint
+	Term              int
 	LeaderId          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
@@ -257,7 +257,7 @@ type InstallSnapshotArgs struct {
 }
 
 type InstallSnapshotReply struct {
-	Term uint
+	Term int
 }
 
 //
@@ -312,9 +312,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 	// prev log matched
 	if args.PrevLogIndex == 0 ||
-		(uint(rf.last_log_index()) >= args.PrevLogIndex && rf.log[rf.log2phy(int(args.PrevLogIndex))].Term == args.PrevLogTerm) {
+		(rf.last_log_index() >= args.PrevLogIndex && rf.log[rf.log2phy(args.PrevLogIndex)].Term == args.PrevLogTerm) {
 		i, j := 0, 0
-		for i = int(args.PrevLogIndex + 1); j < len(args.Entries); j += 1 {
+		for i = args.PrevLogIndex + 1; j < len(args.Entries); j += 1 {
 			if i > rf.last_log_index() {
 				rf.log = append(rf.log, args.Entries[j])
 			} else {
@@ -328,13 +328,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		DPrintf("%d accept append entry of %d, log size %d", rf.me, args.LeaderId, rf.last_log_index())
 		//DPrintf("%v", rf.log)
 		reply.Term, reply.Success, reply.ConflictIndex = args.Term, true, -1
-		rf.advanceCommitIndex_follower(int(args.LeaderCommit))
+		rf.advanceCommitIndex_follower(args.LeaderCommit)
 	} else {
-		if args.PrevLogIndex > uint(rf.last_log_index()) {
+		if args.PrevLogIndex > rf.last_log_index() {
 			reply.ConflictIndex, reply.ConflictTerm = rf.last_log_index()+1, -1
 		} else {
-			reply.ConflictIndex, reply.ConflictTerm = int(args.PrevLogIndex), int(rf.log[rf.log2phy(int(args.PrevLogIndex))].Term)
-			for reply.ConflictIndex >= 1 && int(rf.log[rf.log2phy(int(reply.ConflictIndex))].Term) == reply.ConflictTerm {
+			reply.ConflictIndex, reply.ConflictTerm = args.PrevLogIndex, rf.log[rf.log2phy(args.PrevLogIndex)].Term
+			for reply.ConflictIndex >= 1 && rf.log[rf.log2phy(reply.ConflictIndex)].Term == reply.ConflictTerm {
 				reply.ConflictIndex -= 1
 			}
 			reply.ConflictIndex += 1
@@ -360,7 +360,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.votedFor = -1
 	}
 	rf.set_follower()
-	if uint(args.LastIncludedIndex) <= rf.log[0].Index {
+	if args.LastIncludedIndex <= rf.log[0].Index {
 		DPrintf("%d reject %d's install snapshot for outdated snapshot", rf.me, args.LeaderId)
 		return
 	}
@@ -445,7 +445,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.appendEntry(command)
 	index = rf.last_log_index()
-	term = int(rf.currentTerm)
+	term = rf.currentTerm
+	rf.heartbeats()
 	DPrintf("%d receive command [%d] at term %d", rf.me, index, term)
 	return index, term, isLeader
 }
@@ -486,7 +487,7 @@ func (rf *Raft) last_log() *LogEntry {
 }
 
 func (rf *Raft) log2phy(logic_index int) int {
-	return logic_index - int(rf.log[0].Index)
+	return logic_index - rf.log[0].Index
 }
 
 // generate appendentries args
@@ -500,8 +501,8 @@ func (rf *Raft) append_entry_args_gen(peer int) *AppendEntriesArgs {
 		LeaderCommit: rf.commitIndex,
 	}
 	args.PrevLogIndex, args.PrevLogTerm = rf.prev_log_index_and_term(peer)
-	for i := rf.nextIndex[peer]; i <= uint(rf.last_log_index()); i += 1 {
-		args.Entries = append(args.Entries, rf.log[rf.log2phy(int(i))])
+	for i := rf.nextIndex[peer]; i <= rf.last_log_index(); i += 1 {
+		args.Entries = append(args.Entries, rf.log[rf.log2phy(i)])
 	}
 	return &args
 }
@@ -511,20 +512,20 @@ func (rf *Raft) install_snapshot_args_gen(peer int) *InstallSnapshotArgs {
 	return &InstallSnapshotArgs{
 		Term:              rf.currentTerm,
 		LeaderId:          rf.me,
-		LastIncludedIndex: int(rf.log[0].Index),
-		LastIncludedTerm:  int(rf.log[0].Term),
+		LastIncludedIndex: rf.log[0].Index,
+		LastIncludedTerm:  rf.log[0].Term,
 		Data:              rf.persister.ReadSnapshot(),
 	}
 }
 
 func (rf *Raft) advanceCommitIndex() {
-	matchIndex := make([]uint, len(rf.matchIndex))
+	matchIndex := make([]int, len(rf.matchIndex))
 	copy(matchIndex, rf.matchIndex)
 	sort.Slice(matchIndex, func(i, j int) bool {
 		return matchIndex[i] < matchIndex[j]
 	})
 	CommitIndex := matchIndex[len(matchIndex)/2]
-	if CommitIndex > rf.commitIndex && rf.isLogFresh(rf.currentTerm, int(CommitIndex)) {
+	if CommitIndex > rf.commitIndex && rf.isLogFresh(rf.currentTerm, CommitIndex) {
 		rf.commitIndex = CommitIndex
 		rf.applyCond.Signal()
 		DPrintf("leader %d advance commitIndex to %d", rf.me, rf.commitIndex)
@@ -533,8 +534,8 @@ func (rf *Raft) advanceCommitIndex() {
 
 func (rf *Raft) advanceCommitIndex_follower(LeaderCommit int) {
 	commitIndex := Min(LeaderCommit, rf.last_log_index())
-	if rf.commitIndex < uint(commitIndex) {
-		rf.commitIndex = uint(commitIndex)
+	if rf.commitIndex < commitIndex {
+		rf.commitIndex = commitIndex
 		DPrintf("follower %d advance commitIndex to %d", rf.me, rf.commitIndex)
 		rf.applyCond.Signal()
 	}
@@ -542,14 +543,14 @@ func (rf *Raft) advanceCommitIndex_follower(LeaderCommit int) {
 
 // last log index, 0 if empty
 func (rf *Raft) last_log_index() int {
-	return int(rf.log[len(rf.log)-1].Index)
+	return rf.log[len(rf.log)-1].Index
 }
 
-func (rf *Raft) last_log_term() uint {
+func (rf *Raft) last_log_term() int {
 	return rf.log[len(rf.log)-1].Term
 }
 
-func (rf *Raft) prev_log_index_and_term(peer int) (uint, uint) {
+func (rf *Raft) prev_log_index_and_term(peer int) (int, int) {
 	// if rf.nextIndex[peer] > 1 {
 	// 	i := rf.nextIndex[peer] - 1
 	// 	return uint(i), rf.log[i-1].Term
@@ -557,7 +558,7 @@ func (rf *Raft) prev_log_index_and_term(peer int) (uint, uint) {
 	// 	return 0, 0
 	// }
 	prevLogIndex := rf.nextIndex[peer] - 1
-	return prevLogIndex, rf.log[rf.log2phy(int(prevLogIndex))].Term
+	return prevLogIndex, rf.log[rf.log2phy(prevLogIndex)].Term
 }
 
 func (rf *Raft) set_follower() {
@@ -581,20 +582,20 @@ func (rf *Raft) set_leader() {
 	rf.election_timer.Stop()
 	for i := range rf.matchIndex {
 		rf.matchIndex[i] = 0
-		rf.nextIndex[i] = uint(rf.last_log_index() + 1)
+		rf.nextIndex[i] = rf.last_log_index() + 1
 	}
-	rf.matchIndex[rf.me] = uint(rf.last_log_index())
+	rf.matchIndex[rf.me] = rf.last_log_index()
 	rf.heartbeat_timer.Reset(rf.heartbeat_interval())
 }
 
 func (rf *Raft) appendEntry(command interface{}) {
-	rf.log = append(rf.log, LogEntry{Index: uint(rf.last_log_index() + 1), Term: rf.currentTerm, Command: command})
-	rf.matchIndex[rf.me] = uint(rf.last_log_index())
+	rf.log = append(rf.log, LogEntry{Index: rf.last_log_index() + 1, Term: rf.currentTerm, Command: command})
+	rf.matchIndex[rf.me] = rf.last_log_index()
 	//DPrintf("%v", rf.log)
 	rf.persist()
 }
 
-func (rf *Raft) isLogFresh(term uint, index int) bool {
+func (rf *Raft) isLogFresh(term int, index int) bool {
 	return index <= rf.last_log_index() && rf.log[rf.log2phy(index)].Term == term
 }
 
@@ -632,18 +633,18 @@ func (rf *Raft) applier() {
 			rf.applyCond.Wait()
 		}
 		entries := make([]LogEntry, rf.commitIndex-rf.lastApplied)
-		copy(entries, rf.log[rf.log2phy(int(rf.lastApplied)+1):rf.log2phy(int(rf.commitIndex)+1)])
+		copy(entries, rf.log[rf.log2phy(rf.lastApplied+1):rf.log2phy(rf.commitIndex+1)])
 		rf.mu.Unlock()
 		for _, entry := range entries {
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
 				Command:      entry.Command,
-				CommandIndex: int(entry.Index),
+				CommandIndex: entry.Index,
 			}
-			DPrintf("%d apply command %d at term %d", rf.me, entry.Index, rf.currentTerm)
+			DPrintf("%d apply command %d", rf.me, entry.Index)
 		}
 		rf.mu.Lock()
-		rf.lastApplied += uint(len(entries))
+		rf.lastApplied += len(entries)
 		rf.mu.Unlock()
 	}
 }
@@ -713,8 +714,8 @@ func (rf *Raft) heartbeats() {
 								rf.persist()
 								return
 							}
-							rf.matchIndex[peer] = uint(args.LastIncludedIndex)
-							rf.nextIndex[peer] = uint(args.LastIncludedIndex) + 1
+							rf.matchIndex[peer] = args.LastIncludedIndex
+							rf.nextIndex[peer] = args.LastIncludedIndex + 1
 						}
 					}
 				} else {
@@ -740,15 +741,15 @@ func (rf *Raft) heartbeats() {
 								return
 							}
 							if reply.Success {
-								rf.matchIndex[peer] = args.PrevLogIndex + uint(len(args.Entries))
+								rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
 								rf.nextIndex[peer] = rf.matchIndex[peer] + 1
 								rf.advanceCommitIndex()
 							} else if reply.Term == rf.currentTerm {
 								DPrintf("%d receive %d rejection, ConflictIndex %d", rf.me, peer, reply.ConflictIndex)
-								rf.nextIndex[peer] = uint(reply.ConflictIndex)
+								rf.nextIndex[peer] = reply.ConflictIndex
 								if reply.ConflictTerm != -1 {
 									for i := args.PrevLogIndex; i > rf.log[0].Index; i-- {
-										if rf.log[rf.log2phy(int(i))].Term == uint(reply.ConflictTerm) {
+										if rf.log[rf.log2phy(i)].Term == reply.ConflictTerm {
 											rf.nextIndex[peer] = i + 1
 											break
 										}
@@ -793,8 +794,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.role = Follower
-	rf.nextIndex = make([]uint, len(peers))
-	rf.matchIndex = make([]uint, len(peers))
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
 	rf.election_timer = time.NewTimer(rf.election_start_t_gen())
 	rf.heartbeat_timer = time.NewTimer(rf.heartbeat_interval())
 	if !rf.heartbeat_timer.Stop() {
@@ -805,10 +806,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 	DPrintf("%d persist: term %d, votedfor %d, logsize %d", rf.me, rf.currentTerm, rf.votedFor, rf.last_log_index())
 	for i := range rf.nextIndex {
-		rf.nextIndex[i] = uint(rf.last_log_index() + 1)
+		rf.nextIndex[i] = rf.last_log_index() + 1
 		rf.matchIndex[i] = 0
 	}
-	rf.matchIndex[rf.me] = uint(rf.last_log_index())
+	rf.matchIndex[rf.me] = rf.last_log_index()
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.applier()
