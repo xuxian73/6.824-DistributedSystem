@@ -53,16 +53,14 @@ func (ck *Clerk) Get(key string) string {
 	}
 	for  {
 		reply := GetReply{}
-		DPrintf("client %d send request %d %s Key %s", ck.clientId, args.RequestId, GetOp, args.Key)
-		if (ck.servers[ck.currentLeader].Call("KVServer.Get", &args, &reply)) {
-			if reply.Err == ErrNoKey || reply.Err == OK{
-				ck.requestId += 1
-				return reply.Value
-			} else if reply.Err == ErrWrongLeader || reply.Err == ErrTimeOut {
-				ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
-			} 
-		} else {
+		DPrintf("client %d send request %d to %d %s Key %s", ck.clientId, args.RequestId, ck.currentLeader, GetOp, args.Key)
+		if !ck.servers[ck.currentLeader].Call("KVServer.Get", &args, &reply) || reply.Err == ErrWrongLeader || reply.Err == ErrTimeOut{
+			DPrintf("client %d request do not success, Err: %s", ck.clientId, reply.Err)
 			ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
+			continue
+		} else {
+			ck.requestId += 1
+			return reply.Value
 		}
 	}
 	// You will have to modify this function.
@@ -90,15 +88,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for  {
 		reply := PutAppendReply{}
 		DPrintf("client %d send request %d to %d %s Key %s, Value %s", ck.clientId, args.RequestId, ck.currentLeader, args.Op, args.Key, args.Value)
-		if (ck.servers[ck.currentLeader].Call("KVServer.PutAppend", &args, &reply)) {
-			if reply.Err == OK {
-				ck.requestId += 1
-				return
-			} else {
-				ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
-			} 
-		} else {
+		if !ck.servers[ck.currentLeader].Call("KVServer.PutAppend", &args, &reply) || reply.Err == ErrWrongLeader || reply.Err == ErrTimeOut{
+			DPrintf("client %d request do not success, Err: %s", ck.clientId, reply.Err)
 			ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
+			continue
+		} else {
+			ck.requestId += 1
+			return
 		}
 	}
 }

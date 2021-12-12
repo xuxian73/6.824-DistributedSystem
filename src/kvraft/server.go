@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,8 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	kvstore      map[string]string
 	notifier     map[int]chan Result
-	lastApplied  map[int64]int64 // key: clientId, Value: requestId this server last apply for the client
+	lastRequest  map[int64]int64 // key: clientId, Value: requestId this server last apply for the client
+	lastApplied  int64
 	// Your definitions here.
 }
 
@@ -64,13 +66,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	ch := kv.makeNotifier(index)
 	kv.mu.Unlock()
-	timeout_timer := time.NewTimer(5 * time.Second)
+	timeout_timer := time.NewTimer(500 * time.Millisecond)
 	select {
 	case result, ok := <-ch:
 		// if the channel is closed, that means the commit op
 		// at the index does not match this one. Thus the leadership
 		// has changed
-		DPrintf("%d %d %s %s", args.ClientId, args.RequestId, reply.Err, result.Value)
+		DPrintf("%d %d %s %s", args.ClientId, args.RequestId, result.Err, result.Value)
 
 		if ok && result.ClientId == args.ClientId && result.RequestId == args.RequestId {
 			reply.Err, reply.Value = result.Err, result.Value
@@ -80,14 +82,17 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = ErrWrongLeader
 		}
 	case <- timeout_timer.C:
-		// if do not set timeout timer the cleck would stuck 
+		// if do not set timeout timer the cleck would stuck
 		// if the current server is leader but is partitioned
+		// since the user call is sync
 		reply.Err = ErrTimeOut
 	}
 
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	delete(kv.notifier, index)
+	go func(){ 
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+		delete(kv.notifier, index)
+	}()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -102,6 +107,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("%d start op %s Key: %s, Value: %s", kv.me, op.Type, op.Key, op.Value)
 	index, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
+		DPrintf("%d reject op %s Key: %s, Value: %s for not leader", kv.me, op.Type, op.Key, op.Value)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -109,25 +115,29 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	ch := kv.makeNotifier(index)
 	kv.mu.Unlock()
-	timeout_timer := time.NewTimer(5 * time.Second)
+	timeout_timer := time.NewTimer(500 * time.Millisecond)
 	select {
 	case result, ok := <-ch:
 		// if the channel is closed, that means the commit op
 		// at the index does not match this one. Thus the leadership
 		// has changed
-		DPrintf("%d %d %s %s", args.ClientId, args.RequestId, reply.Err, result.Value)
+		DPrintf("%d %d %s %s", args.ClientId, args.RequestId, result.Err, result.Value)
 
 		if ok && result.ClientId == args.ClientId && result.RequestId == args.RequestId {
 			reply.Err = result.Err
 		} else {
 			reply.Err = ErrWrongLeader
 		}
+		DPrintf("%d reply Clinet %d Request %d %s op Key %s Value %s, reply Err: %s",
+				kv.me, args.ClientId, args.RequestId, op.Type, op.Key, op.Value, reply.Err)
 	case <-timeout_timer.C:
 		reply.Err = ErrTimeOut
 	}
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	delete(kv.notifier, index)
+	go func(){ 
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+		delete(kv.notifier, index)
+	}()
 }
 
 func (kv *KVServer) applier() {
@@ -136,13 +146,14 @@ func (kv *KVServer) applier() {
 
 		if msg.CommandValid {
 			kv.mu.Lock()
+			DPrintf("server %d apply a message, CommandValid: %t, CommandIndex: %d", kv.me, msg.CommandValid, msg.CommandIndex)
 			op := msg.Command.(Op)
 			var result Result
-			lastApplied, ok := kv.lastApplied[op.ClientId]
+			lastRequest, ok := kv.lastRequest[op.ClientId]
 			if !ok {
-				lastApplied, kv.lastApplied[op.ClientId] = 0, 0
+				lastRequest, kv.lastRequest[op.ClientId] = 0, 0
 			}
-			if lastApplied < op.RequestId || op.Type == GetOp {
+			if lastRequest < op.RequestId || op.Type == GetOp {
 				switch op.Type {
 				case GetOp:
 					result = kv.handleGet(op)
@@ -151,7 +162,7 @@ func (kv *KVServer) applier() {
 				case AppendOp:
 					result = kv.handleAppend(op)
 				}
-				kv.lastApplied[op.ClientId] = op.RequestId
+				kv.lastRequest[op.ClientId] = op.RequestId
 			} else {
 				result.Err, result.ClientId, result.RequestId = OK, op.ClientId, op.RequestId
 			}
@@ -159,7 +170,20 @@ func (kv *KVServer) applier() {
 			if ok {
 				notifier <- result
 			}
+			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
+				DPrintf("%d install snapshot at index %d", kv.me, msg.CommandIndex)
+				kv.installSnapshot(msg.CommandIndex)
+			}
 			kv.mu.Unlock()
+		} else if msg.SnapshotValid {
+			kv.mu.Lock()
+			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+				kv.readSnapshot(msg.Snapshot)
+				DPrintf("%d get snapshot index %d", kv.me, msg.SnapshotIndex)
+			}
+			kv.mu.Unlock()
+		} else {
+			panic("unexpected msg")
 		}
 	}
 }
@@ -170,7 +194,7 @@ func (kv *KVServer) handleGet(op Op) Result {
 	if ok {
 		return Result{Err: OK, Value: value, ClientId: op.ClientId, RequestId: op.RequestId}
 	} else {
-		return Result{Err: ErrNoKey, ClientId: op.ClientId, RequestId: op.RequestId}
+		return Result{Err: ErrNoKey, Value: "", ClientId: op.ClientId, RequestId: op.RequestId}
 	}
 }
 
@@ -181,13 +205,13 @@ func (kv *KVServer) handlePut(op Op) Result {
 }
 
 func (kv *KVServer) handleAppend(op Op) Result {
-	DPrintf("%d server handle ApplyMsg %s Key %s, Value %s", kv.me, op.Type, op.Key, op.Value)
 	value, ok := kv.kvstore[op.Key]
 	if !ok {
 		kv.kvstore[op.Key] = op.Value
 	} else {
 		kv.kvstore[op.Key] = value + op.Value
 	}
+	DPrintf("%d server handle ApplyMsg %s Key %s, Value %s", kv.me, op.Type, op.Key, kv.kvstore[op.Key])
 	return Result{Err: OK, ClientId: op.ClientId, RequestId: op.RequestId}
 }
 
@@ -222,6 +246,32 @@ func (kv *KVServer) makeNotifier(index int) chan Result {
 	return kv.notifier[index]
 }
 
+func (kv *KVServer) readSnapshot(snapshot []byte) {
+	if len(snapshot) == 0 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var kvstore map[string]string
+	var lastApplied map[int64]int64
+	if d.Decode(&lastApplied) != nil ||
+		d.Decode(&kvstore) != nil {
+		DPrintf("decode error")
+	} else {
+		kv.lastRequest = lastApplied
+		kv.kvstore = kvstore
+	}
+}
+
+func (kv *KVServer) installSnapshot(index int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.lastRequest)
+	e.Encode(kv.kvstore)
+	snapshot := w.Bytes()
+	kv.rf.Snapshot(index, snapshot)
+}
+
 //
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -251,7 +301,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.kvstore = make(map[string]string)
 	kv.notifier = make(map[int]chan Result)
-	kv.lastApplied = make(map[int64]int64)
+	kv.lastRequest = make(map[int64]int64)
+	kv.lastApplied = 0
+	kv.readSnapshot(persister.ReadSnapshot())
+	DPrintf("%d start, maxraftstate: %d", kv.me, kv.maxraftstate)
 	// You may need initialization code here.
 	go kv.applier()
 	return kv
