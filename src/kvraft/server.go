@@ -43,7 +43,6 @@ type KVServer struct {
 	kvstore      map[string]string
 	notifier     map[int]chan Result
 	lastRequest  map[int64]int64 // key: clientId, Value: requestId this server last apply for the client
-	lastApplied  int64
 	// Your definitions here.
 }
 
@@ -302,7 +301,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.kvstore = make(map[string]string)
 	kv.notifier = make(map[int]chan Result)
 	kv.lastRequest = make(map[int64]int64)
-	kv.lastApplied = 0
 	kv.readSnapshot(persister.ReadSnapshot())
 	DPrintf("%d start, maxraftstate: %d", kv.me, kv.maxraftstate)
 	// You may need initialization code here.

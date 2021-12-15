@@ -1,5 +1,7 @@
 package shardctrler
 
+import "fmt"
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -29,13 +31,75 @@ type Config struct {
 }
 
 const (
-	OK = "OK"
+	Join = "Join"
+	Leave = "Leave"
+	Move = "Move"
+	Query = "Query"
+) 
+
+type Err int8
+
+const (
+	OK Err = iota
+	ErrWrongLeader
+	ErrTimeOut
 )
 
-type Err string
+func (err Err) String() string {
+	switch err {
+	case OK:
+		return "OK"
+	case ErrWrongLeader:
+		return "ErrWrongLeader"
+	case ErrTimeOut:
+		return "ErrTimeOut"
+	default:
+		return "UnknownErr"
+	}
+}
 
+type Op struct {
+	// Your data here.
+	Type      string
+	Servers   map[int][]string
+	Shard     int
+	GIDs      []int
+	GID       int
+	Num       int
+	ClientId  int64
+	RequestId int64
+}
+
+func (op Op) String() string{
+	switch op.Type{
+	case Join:
+		return fmt.Sprintf("%v Servers: %v, ClientId: %v, RequestId: %v", op.Type, op.Servers, op.ClientId, op.RequestId)
+	case Leave:
+		return fmt.Sprintf("%v GIDs: %v, ClientId: %v, RequestId: %v", op.Type, op.GIDs, op.ClientId, op.RequestId)
+	case Move:
+		return fmt.Sprintf("%v Shard: %v, GID: %v, ClientId: %v, RequestId: %v", op.Type, op.Shard, op.GID, op.ClientId, op.RequestId)
+	case Query:
+		return fmt.Sprintf("%v Num: %v, ClientId: %v, RequestId: %v", op.Type, op.Num, op.ClientId, op.RequestId)
+	default:
+		return "Unknown Operation"
+	}
+}
+
+type Result struct {
+	Err         Err
+	Config      Config
+	ClientId    int64
+	RequestId   int64
+}
+
+func (result Result) String() string {
+	return fmt.Sprintf("Err: %v, Config: %v, ClientId: %v, RequestId: %v", result.Err, result.Config, result.ClientId, result.RequestId)
+}
+ 
 type JoinArgs struct {
 	Servers map[int][]string // new GID -> servers mappings
+	ClientId int64
+	RequestId int64
 }
 
 type JoinReply struct {
@@ -45,6 +109,8 @@ type JoinReply struct {
 
 type LeaveArgs struct {
 	GIDs []int
+	ClientId int64
+	RequestId int64
 }
 
 type LeaveReply struct {
@@ -55,6 +121,8 @@ type LeaveReply struct {
 type MoveArgs struct {
 	Shard int
 	GID   int
+	ClientId int64
+	RequestId int64
 }
 
 type MoveReply struct {
@@ -64,6 +132,8 @@ type MoveReply struct {
 
 type QueryArgs struct {
 	Num int // desired config number
+	ClientId int64
+	RequestId int64
 }
 
 type QueryReply struct {
