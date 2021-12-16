@@ -124,6 +124,7 @@ func (sc *ShardCtrler) processOp(op Op) Result {
 	sc.mu.Lock()
 	lastRequest, ok := sc.lastRequest[op.ClientId]
 	if ok && lastRequest >= op.RequestId && op.Type != Query {
+		sc.mu.Unlock()
 		return Result{Err: OK}
 	}
 	sc.mu.Unlock()
@@ -199,7 +200,7 @@ func (sc *ShardCtrler) findMinShardGroup(distribution map[int][]int) int {
 	}
 	sort.Ints(keys)
 	for _, k := range keys {
-		if min > len(distribution[k]) && k != 0{
+		if min > len(distribution[k]) && k != 0 {
 			min = len(distribution[k])
 			gid = k
 		}
@@ -219,13 +220,13 @@ func (sc *ShardCtrler) handleJoin(op Op) Result {
 		distribution[config.Shards[i]] = append(distribution[config.Shards[i]], i)
 	}
 	for {
-		src, dst := sc.findMaxShardGroup(distribution), sc.findMinShardGroup(distribution) 
-		if src != 0 && len(distribution[src]) - len(distribution[dst]) <= 1 {
+		src, dst := sc.findMaxShardGroup(distribution), sc.findMinShardGroup(distribution)
+		if src != 0 && len(distribution[src])-len(distribution[dst]) <= 1 {
 			break
 		}
 		config.Shards[distribution[src][0]] = dst
 		distribution[dst] = append(distribution[dst], distribution[src][0])
-		distribution[src] = distribution[src][1:] 
+		distribution[src] = distribution[src][1:]
 	}
 	config.Num += 1
 	sc.currentConfig += 1
@@ -261,7 +262,7 @@ func (sc *ShardCtrler) handleLeave(op Op) Result {
 			}
 		}
 	}
-	
+
 	sc.configs = append(sc.configs, config)
 	return Result{Err: OK, ClientId: op.ClientId, RequestId: op.RequestId, Config: sc.configs[sc.currentConfig]}
 }

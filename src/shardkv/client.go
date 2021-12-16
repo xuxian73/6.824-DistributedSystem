@@ -39,6 +39,8 @@ type Clerk struct {
 	sm       *shardctrler.Clerk
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
+	clientId int64
+	requestId int64
 	// You will have to modify this struct.
 }
 
@@ -55,6 +57,8 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck := new(Clerk)
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
+	ck.clientId = nrand()
+	ck.requestId = 1
 	// You'll have to add code here.
 	return ck
 }
@@ -67,7 +71,7 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 //
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
-	args.Key = key
+	args.Key, args.ClientId, args.RequestId = key, ck.clientId, ck.requestId
 
 	for {
 		shard := key2shard(key)
@@ -79,6 +83,7 @@ func (ck *Clerk) Get(key string) string {
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.requestId += 1
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -92,7 +97,6 @@ func (ck *Clerk) Get(key string) string {
 		ck.config = ck.sm.Query(-1)
 	}
 
-	return ""
 }
 
 //
@@ -101,10 +105,8 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
+	args.Key, args.Value, args.Op = key, value, op
+	args.ClientId, args.RequestId = ck.clientId, ck.requestId
 
 	for {
 		shard := key2shard(key)
@@ -115,6 +117,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					ck.requestId += 1
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
