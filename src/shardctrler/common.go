@@ -30,6 +30,10 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func NewConfig() Config {
+	return Config{Groups: make(map[int][]string)}
+}
+
 const (
 	Join = "Join"
 	Leave = "Leave"

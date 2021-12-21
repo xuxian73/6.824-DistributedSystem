@@ -493,9 +493,9 @@ func (rf *Raft) heartbeat_interval() time.Duration {
 	return time.Duration(100) * time.Millisecond
 }
 
-// generate election_start_t from 200ms to 350ms
+// generate election_start_t from 500ms to 1000ms
 func (rf *Raft) election_start_t_gen() time.Duration {
-	return time.Duration(rand.Int63n(150)+200) * time.Millisecond
+	return time.Duration(rand.Int63n(500)+500) * time.Millisecond
 }
 
 func (rf *Raft) log2phy(logic_index int) int {

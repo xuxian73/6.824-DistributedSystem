@@ -1,6 +1,9 @@
 package shardkv
 
-import "fmt"
+import (
+	"fmt"
+	"6.824/shardctrler"
+)
 
 //
 // Sharded key/value server.
@@ -28,6 +31,7 @@ const (
 	ErrWrongLeader
 	ErrWrongGroup
 	ErrTimeOut
+	ErrUnmatchConfig
 )
 
 func (err Err) String() string {
@@ -42,6 +46,8 @@ func (err Err) String() string {
 		return "ErrWrongGroup"
 	case ErrTimeOut:
 		return "ErrTimeOut"
+	case ErrUnmatchConfig:
+		return "ErrMatchConfig"
 	default:
 		return "UnknownErr"
 	}
@@ -71,15 +77,96 @@ func (op Op) String() string {
 	}
 }
 
+type CommandType int8
+
+const (
+	Operation CommandType = iota
+	Configuration
+	InstallShard
+	Acknowledge
+)
+
+func (commandType CommandType) String() string {
+	switch commandType {
+	case Operation: return "Operation"
+	case Configuration: return "Configuration"
+	case InstallShard: return "InstallShard"
+	case Acknowledge: return "Acknowledge"
+	default: return "Unknown Command"
+	}
+}
+type Command struct {
+	Type CommandType
+	Data interface{}
+}
+
+func (command Command) String() string {
+	return fmt.Sprintf("Command: %v, Data: {%v}", command.Type, command.Data)
+}
+
+type ShardState int8
+
+const (
+	Serving ShardState = iota
+	Pulling 
+	BePulling
+	Acknowledging
+)
+
+func (state ShardState) String() string {
+	switch state {
+	case Serving: return "Serving"
+	case Pulling: return "Pulling"
+	case BePulling: return "BePulling"
+	case Acknowledging: return "Acknowledging"
+	default: return "Unknown State"
+	}
+}
+
+func NewOperation(op *Op) Command {
+	return Command{Operation, *op}
+}
+
+func NewConfiguration(config *shardctrler.Config) Command {
+	return Command{Configuration, *config}
+}
+
+func NewInstallShard(PullShardReply *PullShardReply) Command {
+	return Command{InstallShard, *PullShardReply}
+}
+
+func NewAcknowledge(args *AcknowledgeArgs) Command {
+	return Command{Acknowledge, *args}
+}
+
+type Shard struct {
+	State ShardState
+	Storage map[string]string
+}
+
+func NewShard() *Shard {
+	return &Shard{ State: Serving, Storage: make(map[string]string) }
+}
+
+func CopyShardData(src map[string]string) map[string]string {
+	ret := make(map[string]string)
+	for k, v := range src {
+		ret[k] = v
+	}
+	return ret
+}
+
+func (shard Shard) String() string {
+	return fmt.Sprintf("Shard State: %v, Storage: %v", shard.State, shard.Storage)
+}
+
 type Result struct {
 	Err       Err
 	Value     string
-	ClientId  int64
-	RequestId int64
 }
 
 func (result Result) String() string {
-	return fmt.Sprintf("Err: %v, Value: %v, ClientId: %v, RequestId: %v", result.Err, result.Value, result.ClientId, result.RequestId)
+	return fmt.Sprintf("Err: %v, Value: %v", result.Err, result.Value)
 }
 
 // Put or Append
@@ -109,4 +196,26 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type PullShardArgs struct {
+	ConfigNum int
+	ShardId []int
+}
+
+type PullShardReply struct {
+	Err Err
+	Num int
+	ShardData map[int]map[string]string
+	LastRequest map[int64]int64
+}
+
+type AcknowledgeArgs struct {
+	ConfigNum int
+	ShardId []int
+}
+
+type AcknowledgeReply struct {
+	Err Err
+	Num int
 }
