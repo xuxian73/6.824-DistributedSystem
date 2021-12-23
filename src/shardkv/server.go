@@ -23,7 +23,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type ShardKV struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
@@ -73,8 +73,8 @@ func (kv *ShardKV) PullShard(args *PullShardArgs, reply *PullShardReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
 	if kv.currentConfig.Num < args.ConfigNum {
 		reply.Err, reply.Num = ErrUnmatchConfig, kv.currentConfig.Num
 		DPrintf("server (%v, %v) reject pullshard request for not ready", kv.gid, kv.me)
@@ -97,15 +97,16 @@ func (kv *ShardKV) Acknowledge(args *AcknowledgeArgs, reply *AcknowledgeReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	kv.mu.Lock()
+	kv.mu.RLock()
 
 	if kv.currentConfig.Num > args.ConfigNum {
 		reply.Err, reply.Num = OK, kv.currentConfig.Num
 		DPrintf("server (%v, %v) reply duplicated Acknowledge Arg Num:%v, reply Num: %v", kv.gid, kv.me, args.ConfigNum, reply.Num)
+		kv.mu.RUnlock()
 		return
 	}
-	
-	kv.mu.Unlock()
+
+	kv.mu.RUnlock()
 	result := kv.processCommand(NewAcknowledge(args))
 	reply.Err = result.Err
 	DPrintf("server (%v, %v) reply acknowledge Err: %v", kv.gid, kv.me, reply.Err)
@@ -121,26 +122,27 @@ func (kv *ShardKV) makeNotifier(index int) chan Result {
 }
 
 func (kv *ShardKV) processCommand(command Command) Result {
-	// if command.Type == Operation {
-	// 	kv.mu.Lock()
-	// 	op := command.Data.(Op)
-	// 	lastRequest, ok := kv.lastRequest[op.ClientId]
-	// 	if kv.currentConfig.Shards[key2shard(op.Key)] != kv.gid {
-	// 		DPrintf("server (%v,%v) reject %v for wrong group", kv.gid, kv.me, op)
-	// 		kv.mu.Unlock()
-	// 		return Result{Err: ErrWrongGroup}
-	// 	}
-	// 	if ok && lastRequest >= op.RequestId && op.Type != "Get" {
-	// 		kv.mu.Unlock()
-	// 		return Result{Err: OK}
-	// 	}
-	// 	kv.mu.Unlock()
-	// }
+	if command.Type == Operation {
+		kv.mu.RLock()
+		op := command.Data.(Op)
+		lastRequest, ok := kv.lastRequest[op.ClientId]
+		if !kv.isServe(op.Key) {
+			DPrintf("server (%v,%v) reject %v for wrong group", kv.gid, kv.me, op)
+			kv.mu.RUnlock()
+			return Result{Err: ErrWrongGroup}
+		}
+		if ok && lastRequest >= op.RequestId && op.Type != "Get" {
+			kv.mu.RUnlock()
+			return Result{Err: OK}
+		}
+		kv.mu.RUnlock()
+	}
+	
 	index, _, isLeader := kv.rf.Start(command)
 	if !isLeader {
 		return Result{Err: ErrWrongLeader}
 	}
-	DPrintf("server (%v,%v) start Command %v", kv.gid, kv.me, command)
+	DPrintf("server (%v, %v) start Command %v", kv.gid, kv.me, command)
 	kv.mu.Lock()
 	ch := kv.makeNotifier(index)
 	kv.mu.Unlock()
@@ -150,7 +152,7 @@ func (kv *ShardKV) processCommand(command Command) Result {
 	case <-time.After(500 * time.Millisecond):
 		result.Err = ErrTimeOut
 	}
-	DPrintf("server (%v,%v) process Command: %v with result %v", kv.gid, kv.me, command, result)
+	DPrintf("server (%v, %v) process Command: %v with result %v", kv.gid, kv.me, command, result)
 	go func() {
 		kv.mu.Lock()
 		defer kv.mu.Unlock()
@@ -189,6 +191,7 @@ func (kv *ShardKV) handleOperation(op *Op) Result {
 	return result
 }
 func (kv *ShardKV) handleGet(op *Op) Result {
+	defer DPrintf("server (%v, %v) handle %v, Key %v", kv.gid, kv.me, op.Type, op.Key)
 	value, ok := kv.shards[key2shard(op.Key)].Storage[op.Key]
 	if ok {
 		return Result{Err: OK, Value: value}
@@ -198,11 +201,13 @@ func (kv *ShardKV) handleGet(op *Op) Result {
 }
 
 func (kv *ShardKV) handlePut(op *Op) Result {
+	defer DPrintf("server (%v, %v) handle %v, Key %v, Value %v", kv.gid, kv.me, op.Type, op.Key, op.Value)
 	kv.shards[key2shard(op.Key)].Storage[op.Key] = op.Value
 	return Result{Err: OK}
 }
 
 func (kv *ShardKV) handleAppend(op *Op) Result {
+	defer DPrintf("server (%v, %v) handle %v, Key %v, Value %v", kv.gid, kv.me, op.Type, op.Key, op.Value)
 	value, ok := kv.shards[key2shard(op.Key)].Storage[op.Key]
 	if !ok {
 		kv.shards[key2shard(op.Key)].Storage[op.Key] = op.Value
@@ -257,7 +262,7 @@ func (kv *ShardKV) handleInstallShard(reply *PullShardReply) Result {
 		result.Err = OK
 		DPrintf("server (%v, %v) handle InstallShard, ShardData: %v, LastRequest: %v, after shard: %v", kv.gid, kv.me, reply.ShardData, reply.LastRequest, kv.shards)
 	} else {
-		DPrintf("server (%v, %v) handle Acknowledge, before shard: %v", kv.gid, kv.me, kv.shards)
+		DPrintf("server (%v, %v) reject outdate InstallShard of %v at %v", kv.gid, kv.me, reply.Num, kv.currentConfig.Num)
 		result.Err = ErrUnmatchConfig
 	}
 	return result
@@ -316,7 +321,7 @@ func (kv *ShardKV) applier() {
 			kv.mu.Lock()
 			var result Result
 			command := msg.Command.(Command)
-			DPrintf("server (%v,%v) apply a message, CommandValid: %t, CommandIndex: %d, CommandType: %v", kv.gid, kv.me, msg.CommandValid, msg.CommandIndex, command.Type)
+			DPrintf("server (%v, %v) apply a message, CommandValid: %t, CommandIndex: %d, CommandType: %v", kv.gid, kv.me, msg.CommandValid, msg.CommandIndex, command.Type)
 			switch command.Type {
 			case Operation:
 				op := command.Data.(Op)
@@ -337,7 +342,7 @@ func (kv *ShardKV) applier() {
 				notifier <- result
 			}
 			if kv.maxraftstate > 0 && kv.rf.RaftStateSize() >= kv.maxraftstate {
-				DPrintf("server (%v,%v) install snapshot at index %d", kv.gid, kv.me, msg.CommandIndex)
+				DPrintf("server (%v, %v) install snapshot at index %d", kv.gid, kv.me, msg.CommandIndex)
 				kv.installSnapshot(msg.CommandIndex)
 			}
 			kv.mu.Unlock()
@@ -345,7 +350,7 @@ func (kv *ShardKV) applier() {
 			kv.mu.Lock()
 			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
 				kv.readSnapshot(msg.Snapshot)
-				DPrintf("server (%v,%v) get snapshot index %d", kv.gid, kv.me, msg.SnapshotIndex)
+				DPrintf("server (%v, %v) get snapshot index %d", kv.gid, kv.me, msg.SnapshotIndex)
 			}
 			kv.mu.Unlock()
 		} else {
@@ -367,10 +372,13 @@ func (kv *ShardKV) querier() {
 	for !kv.killed() {
 		_, isLeader := kv.rf.GetState()
 		if isLeader {
-			kv.mu.Lock()
+			kv.mu.RLock()
 			ok := kv.isOkToConfig()
 			currentConifgNum := kv.currentConfig.Num
-			kv.mu.Unlock()
+			if ok {
+				DPrintf("server (%v, %v) start a query task at %v", kv.gid, kv.me, currentConifgNum)
+			}
+			kv.mu.RUnlock()
 			if ok {
 				NewConfig := kv.mck.Query(currentConifgNum + 1)
 				if NewConfig.Num == currentConifgNum+1 {
@@ -404,17 +412,17 @@ func (kv *ShardKV) puller() {
 	for !kv.killed() {
 		_, isLeader := kv.rf.GetState()
 		if isLeader {
-			kv.mu.Lock()
+			kv.mu.RLock()
 			gid2shards := kv.Gid2ShardsOfState(Pulling)
 			configNum := kv.currentConfig.Num
 			if len(gid2shards) > 0 {
-				DPrintf("server(%v, %v) start pull shard task, GID-Shards: %v", kv.gid, kv.me, gid2shards)
+				DPrintf("server (%v, %v) start pull shard task, ConfigNum: %v, GID-Shards: %v", kv.gid, kv.me, configNum, gid2shards)
 			}
 			Servers := make(map[int][]*labrpc.ClientEnd)
 			for gid := range gid2shards {
 				Servers[gid] = kv.make_group_end(gid)
 			}
-			kv.mu.Unlock()
+			kv.mu.RUnlock()
 			var wg sync.WaitGroup
 			for gid, shardid := range gid2shards {
 				wg.Add(1)
@@ -440,17 +448,17 @@ func (kv *ShardKV) acknowledger() {
 	for !kv.killed() {
 		_, isLeader := kv.rf.GetState()
 		if isLeader {
-			kv.mu.Lock()
+			kv.mu.RLock()
 			gid2shards := kv.Gid2ShardsOfState(Acknowledging)
 			configNum := kv.currentConfig.Num
 			if len(gid2shards) > 0 {
-				DPrintf("server(%v, %v) start acknowledge task, GID-Shards: %v", kv.gid, kv.me, gid2shards)
+				DPrintf("server (%v, %v) start acknowledge task, ConfigNum: %v, GID-Shards: %v", kv.gid, kv.me, configNum, gid2shards)
 			}
 			Servers := make(map[int][]*labrpc.ClientEnd)
 			for gid := range gid2shards {
 				Servers[gid] = kv.make_group_end(gid)
 			}
-			kv.mu.Unlock()
+			kv.mu.RUnlock()
 			var wg sync.WaitGroup
 			for gid, shardid := range gid2shards {
 				wg.Add(1)
@@ -468,8 +476,19 @@ func (kv *ShardKV) acknowledger() {
 			}
 			wg.Wait()
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond)
+}
+
+func (kv *ShardKV) nooper() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); isLeader {
+			if !kv.rf.IsCurrentTerm() {
+				kv.processCommand(NewEmptyCommand())
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func (kv *ShardKV) installSnapshot(index int) {
@@ -493,16 +512,16 @@ func (kv *ShardKV) readSnapshot(snapshot []byte) {
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
 	var kvstore map[int]*Shard
-	var lastApplied map[int64]int64
+	var lastRequest map[int64]int64
 	var currentConfig shardctrler.Config
 	var lastConfig shardctrler.Config
-	if d.Decode(&lastApplied) != nil ||
+	if d.Decode(&lastRequest) != nil ||
 		d.Decode(&kvstore) != nil ||
 		d.Decode(&currentConfig) != nil ||
 		d.Decode(&lastConfig) != nil {
 		DPrintf("decode error")
 	} else {
-		kv.lastRequest = lastApplied
+		kv.lastRequest = lastRequest
 		kv.shards = kvstore
 		kv.currentConfig = currentConfig
 		kv.lastConfig = lastConfig
@@ -571,5 +590,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.querier()
 	go kv.puller()
 	go kv.acknowledger()
+	go kv.nooper()
 	return kv
 }

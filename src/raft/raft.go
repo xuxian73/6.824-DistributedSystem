@@ -489,6 +489,12 @@ func (rf *Raft) RaftStateSize() int {
 	return rf.persister.RaftStateSize()
 }
 
+func (rf *Raft) IsCurrentTerm() (bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.last_log_term() == rf.currentTerm
+}
+
 func (rf *Raft) heartbeat_interval() time.Duration {
 	return time.Duration(100) * time.Millisecond
 }

@@ -84,6 +84,7 @@ const (
 	Configuration
 	InstallShard
 	Acknowledge
+	EmptyCommand
 )
 
 func (commandType CommandType) String() string {
@@ -92,6 +93,7 @@ func (commandType CommandType) String() string {
 	case Configuration: return "Configuration"
 	case InstallShard: return "InstallShard"
 	case Acknowledge: return "Acknowledge"
+	case EmptyCommand: return "EmptyCommand"
 	default: return "Unknown Command"
 	}
 }
@@ -137,6 +139,10 @@ func NewInstallShard(PullShardReply *PullShardReply) Command {
 
 func NewAcknowledge(args *AcknowledgeArgs) Command {
 	return Command{Acknowledge, *args}
+}
+
+func NewEmptyCommand() Command {
+	return Command{Type: EmptyCommand}
 }
 
 type Shard struct {

@@ -42,6 +42,7 @@ type Clerk struct {
 	clientId int64
 	requestId int64
 	// You will have to modify this struct.
+	currentLeader map[int]int
 }
 
 //
@@ -59,6 +60,7 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.make_end = make_end
 	ck.clientId = nrand()
 	ck.requestId = 1
+	ck.currentLeader = make(map[int]int)
 	// You'll have to add code here.
 	return ck
 }
@@ -79,15 +81,25 @@ func (ck *Clerk) Get(key string) string {
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.currentLeader[gid]])
 				var reply GetReply
+				DPrintf("client call %v, %v to Get %v", gid, ck.currentLeader[gid], args.Key)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-					ck.requestId += 1
-					return reply.Value
-				}
-				if ok && (reply.Err == ErrWrongGroup) {
-					break
+				if ok {
+					switch reply.Err {
+					case OK:
+						ck.requestId += 1
+						return reply.Value
+					case ErrNoKey:
+						ck.requestId += 1
+						return reply.Value
+					case ErrWrongGroup:
+						break
+					case ErrWrongLeader:
+						ck.currentLeader[gid] = (ck.currentLeader[gid] + 1) % len(servers) 
+					}
+				} else {
+					ck.currentLeader[gid] = (ck.currentLeader[gid] + 1) % len(servers)
 				}
 				// ... not ok, or ErrWrongLeader
 			}
@@ -113,15 +125,22 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.currentLeader[gid]])
 				var reply PutAppendReply
+				DPrintf("client call %v, %v to %v %v", gid, ck.currentLeader[gid], args.Op, args.Key)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && reply.Err == OK {
-					ck.requestId += 1
-					return
-				}
-				if ok && reply.Err == ErrWrongGroup {
-					break
+				if ok {
+					switch reply.Err {
+					case OK: 
+						ck.requestId += 1
+						return
+					case ErrWrongGroup:
+						break
+					case ErrWrongLeader:
+						ck.currentLeader[gid] = (ck.currentLeader[gid] + 1) % len(servers)
+					}
+				} else {
+					ck.currentLeader[gid] = (ck.currentLeader[gid] + 1) % len(servers)
 				}
 				// ... not ok, or ErrWrongLeader
 			}
